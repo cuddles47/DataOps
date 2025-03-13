@@ -1,0 +1,60 @@
+# Ignore data files
+.Data/*.csv
+.Data/**/*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment files
+.env
+.env.*
+!.env.example
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Logs
+*.log
+postgres_import_*.log
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Editor specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
