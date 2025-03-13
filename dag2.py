@@ -10,10 +10,14 @@ default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
     'start_date': datetime(2025, 3, 13),
-    'email_on_failure': False,
+    'email': ['your-email@example.com'],  # Add your email for notifications
+    'email_on_failure': True,  # Enable email notifications on failure
     'email_on_retry': False,
-    'retries': 1,
+    'retries': 2,  # Increase retry attempts
     'retry_delay': timedelta(minutes=5),
+    'retry_exponential_backoff': True,  # Enable exponential backoff
+    'max_retry_delay': timedelta(minutes=30),
+    'execution_timeout': timedelta(hours=2),  # Set execution timeout
 }
 
 # Create the DAG
@@ -23,39 +27,77 @@ dag = DAG(
     description='A DAG to clean Canada housing data',
     schedule_interval=timedelta(days=1),
     catchup=False,
+    max_active_runs=1,  # Prevent multiple concurrent runs
+    tags=['data_cleaning', 'canada_housing'],  # Add tags for better organization
+    doc_md="""
+    # Canada Housing Data Cleaning
+    
+    This DAG processes raw housing data from multiple Canadian provinces and 
+    performs various cleaning operations to prepare it for analysis.
+    
+    ## Data Flow
+    1. Load data from CSV files
+    2. Clean and standardize different property features
+    3. Export cleaned data to CSV
+    """,  # Add documentation
 )
 
 def load_data(**kwargs):
     """Load CSV files into individual Pandas DataFrames and concatenate them."""
-    # Define the input directory - adjust this path as needed
-    input_dir = '/path/to/input/data'
+    from airflow.models import Variable
     
-    # List of province codes
-    provinces = ['ab', 'bc', 'mb', 'nb', 'nl', 'ns', 'nt', 'on', 'pe', 'sk', 'yt']
-    
-    # Load each province's data
-    dataframes = []
-    for province in provinces:
-        file_path = os.path.join(input_dir, f'data_{province}.csv')
-        df = pd.read_csv(file_path, low_memory=False)
-        dataframes.append(df)
-    
-    # Concatenate all DataFrames
-    df = pd.concat(dataframes, axis=0)
-    
-    # Drop duplicates
-    df = df.drop_duplicates()
-    
-    # Drop duplicate columns
-    df = df.T.drop_duplicates().T
-    
-    # Drop rows with null values in essential columns
-    df = df.dropna(subset=["streetAddress", "addressLocality", "addressRegion", "price"])
-    
-    # Store the DataFrame for the next task
-    kwargs['ti'].xcom_push(key='raw_data', value=df.to_json(orient='split'))
-    
-    return "Data loaded and initial cleaning complete"
+    try:
+        # Get input directory from Airflow Variables
+        input_dir = Variable.get("canada_housing_input_dir", 
+                                default_var='/path/to/input/data')
+        
+        # List of province codes
+        provinces = ['ab', 'bc', 'mb', 'nb', 'nl', 'ns', 'nt', 'on', 'pe', 'sk', 'yt']
+        
+        # Load each province's data
+        dataframes = []
+        for province in provinces:
+            file_path = os.path.join(input_dir, f'data_{province}.csv')
+            if not os.path.exists(file_path):
+                kwargs['ti'].xcom_push(key=f'missing_file_{province}', value=file_path)
+                continue
+                
+            df = pd.read_csv(file_path, low_memory=False)
+            kwargs['ti'].xcom_push(key=f'rows_{province}', value=len(df))
+            dataframes.append(df)
+        
+        # Concatenate all DataFrames
+        if not dataframes:
+            raise ValueError("No data files were found")
+            
+        df = pd.concat(dataframes, axis=0)
+        
+        # Log total number of rows
+        kwargs['ti'].xcom_push(key='total_rows_raw', value=len(df))
+        
+        # Drop duplicates
+        df = df.drop_duplicates()
+        
+        # Log rows after removing duplicates
+        kwargs['ti'].xcom_push(key='rows_after_dedup', value=len(df))
+        
+        # Drop duplicate columns
+        df = df.T.drop_duplicates().T
+        
+        # Drop rows with null values in essential columns
+        df = df.dropna(subset=["streetAddress", "addressLocality", "addressRegion", "price"])
+        
+        # Log rows after removing nulls
+        kwargs['ti'].xcom_push(key='rows_after_dropna', value=len(df))
+        
+        # Store the DataFrame for the next task
+        kwargs['ti'].xcom_push(key='raw_data', value=df.to_json(orient='split'))
+        
+        return "Data loaded and initial cleaning complete"
+    except Exception as e:
+        # Log the error and raise it again
+        logging.error(f"Error in load_data: {str(e)}")
+        raise
 
 def clean_square_footage(**kwargs):
     """Clean and combine square footage data."""
@@ -518,18 +560,68 @@ def remove_inconsistent_data(**kwargs):
 
 def save_data(**kwargs):
     """Save the cleaned data to CSV."""
-    # Get the DataFrame from the previous task
-    ti = kwargs['ti']
-    df_json = ti.xcom_pull(key='cleaned_data', task_ids='remove_inconsistent_data')
-    df = pd.read_json(df_json, orient='split')
+    from airflow.models import Variable
     
-    # Define the output path - adjust as needed
-    output_path = '/path/to/output/data/cleaned_canada.csv'
-    
-    # Save to CSV
-    df.to_csv(output_path, index=False)
-    
-    return f"Data saved to {output_path}"
+    try:
+        # Get the DataFrame from the previous task
+        ti = kwargs['ti']
+        df_json = ti.xcom_pull(key='cleaned_data', task_ids='remove_inconsistent_data')
+        df = pd.read_json(df_json, orient='split')
+        
+        # Get output directory from Airflow Variables
+        output_dir = Variable.get("canada_housing_output_dir", 
+                                 default_var='/path/to/output/data')
+        
+        # Create directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Define the output path
+        output_path = os.path.join(output_dir, f'cleaned_canada_{datetime.now().strftime("%Y%m%d")}.csv')
+        
+        # Log data quality metrics
+        kwargs['ti'].xcom_push(key='final_row_count', value=len(df))
+        kwargs['ti'].xcom_push(key='null_counts', value=df.isnull().sum().to_dict())
+        
+        # Save to CSV
+        df.to_csv(output_path, index=False)
+        
+        return f"Data saved to {output_path}"
+    except Exception as e:
+        logging.error(f"Error in save_data: {str(e)}")
+        raise
+
+# Add a data quality check task
+def check_data_quality(**kwargs):
+    """Perform data quality checks on the cleaned dataset."""
+    try:
+        ti = kwargs['ti']
+        df_json = ti.xcom_pull(key='cleaned_data', task_ids='remove_inconsistent_data')
+        df = pd.read_json(df_json, orient='split')
+        
+        # Check for remaining null values in critical columns
+        critical_cols = ['Price', 'Bedrooms', 'Bathrooms', 'Square Footage']
+        null_counts = {col: df[col].isnull().sum() for col in critical_cols}
+        
+        # Check for outliers in Price
+        q1 = df['Price'].quantile(0.25)
+        q3 = df['Price'].quantile(0.75)
+        iqr = q3 - q1
+        price_outliers = df[(df['Price'] < (q1 - 1.5 * iqr)) | (df['Price'] > (q3 + 1.5 * iqr))].shape[0]
+        
+        # Log results
+        kwargs['ti'].xcom_push(key='data_quality_null_counts', value=null_counts)
+        kwargs['ti'].xcom_push(key='data_quality_price_outliers', value=price_outliers)
+        
+        if any(count > 0 for count in null_counts.values()):
+            logging.warning(f"Found null values in critical columns: {null_counts}")
+        
+        if price_outliers > 0:
+            logging.warning(f"Found {price_outliers} price outliers")
+        
+        return "Data quality checks completed"
+    except Exception as e:
+        logging.error(f"Error in check_data_quality: {str(e)}")
+        raise
 
 # Define task dependencies
 task_load_data = PythonOperator(
@@ -644,9 +736,17 @@ task_save_data = PythonOperator(
     dag=dag,
 )
 
+# Add the new task
+task_check_data_quality = PythonOperator(
+    task_id='check_data_quality',
+    python_callable=check_data_quality,
+    provide_context=True,
+    dag=dag,
+)
+
 # Set up task dependencies
 task_load_data >> task_clean_square_footage >> task_clean_acreage >> task_clean_bathrooms
 task_clean_bathrooms >> task_clean_garage_parking >> task_clean_basement >> task_clean_exterior
 task_clean_exterior >> task_clean_fireplace >> task_clean_heating >> task_clean_flooring
 task_clean_flooring >> task_clean_roof >> task_clean_waterfront_sewer >> task_add_additional_features
-task_add_additional_features >> task_finalize_dataset >> task_remove_inconsistent_data >> task_save_data
+task_add_additional_features >> task_finalize_dataset >> task_remove_inconsistent_data >> task_check_data_quality >> task_save_data
