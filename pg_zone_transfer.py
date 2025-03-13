@@ -83,31 +83,19 @@ def get_tables_from_source():
         logger.error(traceback.format_exc())
         raise
 
-def clean_column_name(column_name):
-    """Clean column names to be compatible with PostgreSQL"""
-    # Replace spaces and special characters with underscores
-    cleaned = column_name.lower().replace(' ', '_')
-    cleaned = ''.join(c if c.isalnum() or c == '_' else '_' for c in cleaned)
-    
-    # Ensure name doesn't start with a number
-    if cleaned[0].isdigit():
-        cleaned = 'col_' + cleaned
-        
-    return cleaned
-
 def handle_duplicate_columns(df):
-    """Rename duplicate columns to make them unique for PostgreSQL"""
+    """Handle duplicate column names by appending a number"""
+    columns = df.columns.tolist()
     counts = {}
     new_columns = []
     
-    for col in df.columns:
-        clean_col = clean_column_name(col)
-        if clean_col in counts:
-            counts[clean_col] += 1
-            new_columns.append(f"{clean_col}_{counts[clean_col]}")
+    for i, col in enumerate(columns):
+        if col in counts:
+            counts[col] += 1
+            new_columns.append(f"{col}_{counts[col]}")
         else:
-            counts[clean_col] = 0
-            new_columns.append(clean_col)
+            counts[col] = 0
+            new_columns.append(col)
     
     # Rename columns to the new unique names
     df.columns = new_columns
@@ -145,15 +133,11 @@ def create_table_if_not_exists(conn, table_name, df):
     """Create a table based on DataFrame structure if it doesn't exist"""
     column_types = infer_column_types(df)
     
-    # Clean column names
-    clean_columns = {col: clean_column_name(col) for col in df.columns}
-    df = df.rename(columns=clean_columns)
-    
     # Create columns definition
     columns_def = []
     for column in df.columns:
         col_type = column_types.get(column, 'TEXT')
-        columns_def.append(f"{column} {col_type}")
+        columns_def.append(f'"{column}" {col_type}')
     
     create_table_query = f"""
     CREATE TABLE IF NOT EXISTS {table_name} (
@@ -174,10 +158,6 @@ def create_table_if_not_exists(conn, table_name, df):
 
 def insert_data(conn, table_name, df):
     """Insert data from DataFrame into PostgreSQL table"""
-    # Clean column names
-    clean_columns = {col: clean_column_name(col) for col in df.columns}
-    df = df.rename(columns=clean_columns)
-    
     # Replace NaN with None for proper SQL NULL values
     df = df.replace({np.nan: None})
     
