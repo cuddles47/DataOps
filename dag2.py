@@ -10,7 +10,7 @@ default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
     'start_date': datetime(2025, 3, 13),
-    'email': ['your-email@example.com'],  # Add your email for notifications
+    'email': ['kilancauvonglaplanh@gmail.com'],  
     'email_on_failure': True,  # Enable email notifications on failure
     'email_on_retry': False,
     'retries': 2,  # Increase retry attempts
