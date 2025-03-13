@@ -1,0 +1,16 @@
+# Core packages
+pandas==2.0.0
+numpy==1.24.3
+python-dotenv==1.0.0
+
+# Database packages
+psycopg2-binary==2.9.6
+
+# Airflow packages
+apache-airflow==2.6.3
+apache-airflow-providers-postgres==5.5.0
+
+# Testing and development tools
+pytest==7.3.1
+black==23.3.0
+flake8==6.0.0
