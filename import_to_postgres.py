@@ -37,14 +37,35 @@ PG_CONFIG = {
 DATA_DIR = os.getenv('DATA_DIR', '.Data/')
 
 def connect_to_postgres():
-    """Establish connection to PostgreSQL database"""
+    """Establish connection to PostgreSQL database with better error handling"""
     try:
         logger.info(f"Connecting to PostgreSQL at {PG_CONFIG['host']}:{PG_CONFIG['port']}")
-        conn = psycopg2.connect(**PG_CONFIG)
+        logger.info(f"Database: {PG_CONFIG['database']}, User: {PG_CONFIG['user']}")
+        
+        # Add connection timeout to prevent hanging
+        conn = psycopg2.connect(
+            **PG_CONFIG,
+            connect_timeout=10  # 10 second timeout
+        )
+        
         logger.info("Successfully connected to PostgreSQL")
         return conn
+    except psycopg2.OperationalError as e:
+        logger.error(f"Connection error: {str(e)}")
+        
+        # Check common issues
+        if "could not connect to server" in str(e):
+            logger.error("PostgreSQL server may not be running or is not accessible at the specified host/port")
+            logger.error("If using Docker, verify the container is running and port mapping is correct")
+            logger.error("Try: docker ps | grep postgres")
+        elif "password authentication failed" in str(e):
+            logger.error("Authentication failed - verify your username and password")
+        elif "database" in str(e) and "does not exist" in str(e):
+            logger.error(f"Database '{PG_CONFIG['database']}' does not exist")
+        
+        raise
     except Exception as e:
-        logger.error(f"Error connecting to PostgreSQL: {str(e)}")
+        logger.error(f"Unexpected error connecting to PostgreSQL: {str(e)}")
         raise
 
 def get_csv_files():
@@ -170,6 +191,25 @@ def insert_data(conn, table_name, df):
         logger.error(traceback.format_exc())
         raise
 
+def handle_duplicate_columns(df):
+    """Rename duplicate columns to make them unique for PostgreSQL"""
+    counts = {}
+    new_columns = []
+    
+    for col in df.columns:
+        clean_col = clean_column_name(col)
+        if clean_col in counts:
+            counts[clean_col] += 1
+            new_columns.append(f"{clean_col}_{counts[clean_col]}")
+        else:
+            counts[clean_col] = 0
+            new_columns.append(clean_col)
+    
+    # Rename columns to the new unique names
+    df.columns = new_columns
+    
+    return df
+
 def import_csv_to_postgres(csv_file, conn):
     """Import a single CSV file to PostgreSQL"""
     try:
@@ -181,6 +221,14 @@ def import_csv_to_postgres(csv_file, conn):
         # Read CSV file
         df = pd.read_csv(csv_file, low_memory=False)
         logger.info(f"Read {len(df)} rows from {csv_file}")
+        
+        # Check for and rename duplicate columns
+        orig_cols = len(df.columns)
+        df = handle_duplicate_columns(df)
+        if len(df.columns) == orig_cols:
+            logger.info(f"No duplicate column names found in {table_name}")
+        else:
+            logger.info(f"Renamed duplicate columns in {table_name}")
         
         # Create table if it doesn't exist
         create_table_if_not_exists(conn, table_name, df)
